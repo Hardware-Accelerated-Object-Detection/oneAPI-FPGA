@@ -1,0 +1,23 @@
+# ignore all log and txt files
+*.txt
+*.log
+# ignore all the OMP files
+OMP/*
+# ignore all the compiled files
+*.o
+*.c.o
+*.obj
+*.so
+*.dylib
+*.exe
+*.out
+*.class
+*.swp
+*.swo
+*.swn
+*.swm
+#ignore the cmake file
+cmake-build-debug/
+.idea/
+#ignore all the build files
+build/*
