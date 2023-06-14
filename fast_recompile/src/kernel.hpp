@@ -4,6 +4,12 @@
 // SPDX-License-Identifier: MIT
 // =============================================================
 #include <sycl/sycl.hpp>
+#include <oneapi/mkl/dfti.hpp>
+#include <oneapi/mkl/rng.hpp>
+#include <oneapi/mkl/vm.hpp>
+#include <mkl.h>
+#include "../../include/pipe_utils.hpp"
+#include "../../include/unrolled_loop.hpp"
 #include <math.h>
 #include <stdio.h>
 #include <iostream>
@@ -24,82 +30,124 @@ using namespace sycl;
 #define f0 77e9
 #define lamda lightSpeed / f0
 #define d = 0.5 * lamda
-
 #define fifo_depth 4
 
-class Complex_t
-{
-public:
-    double real;
-    double imag;
-    /**
-     * Class constructor
-     */
-    Complex_t(double r, double i)
-    {
-        real = r;
-        imag = i;
-    }
+using preProcessingPipe = ext::intel::pipe<class preprocessingID, std::complex<double>, fifo_depth>;
+class preprocessingProducerClass;
+class preprocessingConsumerClass;
 
-    Complex_t()
-    {
-        real = 0.0;
-        imag = 0.0;
-    }
-    /**
-     * operator overloading
-     */
-    Complex_t operator+(const Complex_t &a)
-    {
-        Complex_t res;
-        res.real = a.real + real;
-        res.imag = a.imag + imag;
-        return res;
-    }
-    Complex_t operator-(const Complex_t &a)
-    {
-        Complex_t res;
-        res.real = real - a.real;
-        res.imag = imag - a.imag;
-        return res;
-    }
-    Complex_t operator*(const Complex_t &a)
-    {
-        Complex_t res;
-        res.real = a.real * real - a.imag * imag;
-        res.imag = a.real * imag - a.imag * real;
-        return res;
-    }
-    bool operator!=(const Complex_t &a)
-    {
-        return (real == a.real && imag == a.imag);
-    }
-    bool operator==(const Complex_t &a)
-    {
-        return (real == a.real && imag == a.imag);
-    }
+event PreProcessingProducer(queue &q, buffer<short, 1>& raw_input, buffer<std::complex<double>,1>& hold,buffer<short,1> &base_frame ,buffer<int,1> &write_time);
 
-    double getModulu()
-    {
-        return (sqrt(real * real + imag * imag));
-    }
-};
-// initialize the reading to preprocessing pipe in FPGA
-using ReadToReshapePipe = ext::intel::pipe<class ReadToPreprocPipeID, short, fifo_depth>;
-class ReadProducerClass;
-class ReshapeConsumerClass;
+event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output, buffer<int,1> &read_time);
+
+
+using fftPipeArray = fpga_tools::PipeArray<
+    class fftPipeID, std::complex<double>,
+    fifo_depth, RxSize>;
 /**
- * @param ReadProducer: pack the input short typed raw data into complex type a
- * and transmitt the complex typed data to producer for reshape and pairing
- * @param q: device queue.
- * @param raw_buffer: buffer stores the raw short typed data.
- */
-event ReadProducer(queue &q, buffer<short, 1> &raw_buffer);
-/**
- * reshape consumer event
- * @param q: device queue.
- * @param hold_buf: buffer to hold the raw data from fifo with depth = fifo_depth;
- * @param out_buf: output buffer filled with reshaped data with depth = RxSize * ChirpSize * SampleSize / 2;
- * 
+ * fft producer & consumer.
 */
-event ReshapeConsumer(queue &q, buffer<short,1> &hold_buf, buffer<Complex_t, 1> &out_buf);
+
+
+
+template<size_t producer_id> class fftProducerClass;
+template <size_t consumer_id, size_t chunk_size, size_t num_elements> class fftConsumerReadClass;
+template <size_t consumer_id, size_t chunk_size, size_t num_elements> class fftConsumerButerflyClass;
+
+
+template<size_t producer_id>
+event fftProducer(queue &q, buffer<std::complex<double>,1> &input)
+{
+    std::cout << "Enqueuing FFT Producer " << producer_id << std::endl;
+    auto e = q.submit([&](handler &h){
+        accessor in(input, h, read_only);
+        auto num_elements = input.size();
+        h.single_task<fftProducerClass<producer_id>>([=](){
+            size_t i = 0;
+            for(size_t pass = 0; pass < num_elements; pass ++){
+                fftPipeArray::PipeAt<producer_id>::write(in[i++]);
+            }
+        });
+    });
+    return e;
+}
+
+
+/**
+ * fft helper function
+*/
+namespace fft_helper{
+    int bitsReverse(int num, int bits);
+    void hostFFT(std::vector<std::complex<double>> &input, int bits);
+}
+
+
+SYCL_EXTERNAL int kernelBitsReverse(int num, int bits);
+
+
+template <size_t consumer_id, size_t chunk_size, size_t num_elements>
+event fftConsumer(queue &q, buffer<std::complex<double>,1> &output, int pow)
+{
+    std::cout << "Enqueuing FFT Consumer " << consumer_id << std::endl;
+    auto dataReadEvent = q.submit([&](handler &h){
+        accessor out(output, h, write_only);
+        h.single_task<fftConsumerReadClass<consumer_id, chunk_size, num_elements>>([=](){
+            for(size_t i = 0; i < num_elements; i ++)
+            {
+                out[i] = fftPipeArray::PipeAt<consumer_id>::read();
+            }
+        });
+    });
+    dataReadEvent.wait();
+    auto fftEvent = q.submit([&](handler &h){
+        accessor chunk(output, h, read_write);
+        h.single_task<fftConsumerButerflyClass<consumer_id,chunk_size, num_elements>>([=](){
+            fpga_tools::UnrolledLoop<num_elements / chunk_size>([&](auto chunk_idx){
+                // bit reverse for each chunk
+                size_t offset = chunk_idx * chunk_size;
+                // auto chunk = out[offset];
+                for(size_t i = 0; i < chunk_size; i++)
+                {
+                    int reversedIdx = kernelBitsReverse(i, pow);
+                    if(reversedIdx > i)
+                    {
+                        auto temp = chunk[i + offset];
+                        chunk[i + offset] = chunk[reversedIdx + offset];
+                        chunk[reversedIdx + offset] = temp;
+                    }
+                }
+                // butterfly computation for each chunk 
+                for(int mid = 1; mid < chunk_size; mid <<=1)
+                {
+                    std::complex<double> Wn(cos(PI / mid), -sin(PI/mid));
+                    for(int stride = mid << 1, j = 0; j < chunk_size; j += stride)
+                    {
+                        std::complex<double> w(1,0);
+                        for(int k = 0; k < mid; k ++, w = w * Wn)
+                        {
+                            auto a = chunk[j + k + offset];
+                            auto b = chunk[j + mid + k + offset] * w;
+                            chunk[j + k + offset] = a + b;
+                            chunk[j + mid + k + offset] = a - b;
+                        }
+                    }
+                }
+            
+            });
+
+        });
+    });
+    return fftEvent;
+}   
+
+
+/**
+ * producer & consumer for speed detection.
+*/
+class speedDetectionClass;
+template<size_t producer_id>
+event speedDetectionProducer(queue &q, buffer<std::complex<double>,1> &input);
+
+class speedDetectionClass;
+template<size_t consumer_id>
+event speedDetectionConsumer(queue &q, buffer<std::complex<double>,1> &output);
