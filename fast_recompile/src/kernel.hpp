@@ -36,14 +36,22 @@ using preProcessingPipe = ext::intel::pipe<class preprocessingID, std::complex<d
 class preprocessingProducerClass;
 class preprocessingConsumerClass;
 
-event PreProcessingProducer(queue &q, buffer<short, 1>& raw_input, buffer<std::complex<double>,1>& hold,buffer<short,1> &base_frame ,buffer<int,1> &write_time);
+event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &output);
 
-event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output, buffer<int,1> &read_time);
+event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output);
 
 
 using fftPipeArray = fpga_tools::PipeArray<
     class fftPipeID, std::complex<double>,
     fifo_depth, RxSize>;
+
+using testPipe = ext::intel::pipe<class testPipeID, std::complex<double>, fifo_depth>;
+// event testProducer(queue &q, buffer<std::complex<double>,1> &output);
+event testProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &output);
+event testConsumer(queue &q, buffer<std::complex<double>,1> &output);
+
+
+
 /**
  * fft producer & consumer.
 */

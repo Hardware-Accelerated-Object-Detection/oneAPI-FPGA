@@ -96,15 +96,16 @@ int main(int argc, char *argv[])
      * vector buffer declaration
      */
     std::vector<short> base_frame(read_data, read_data + data_per_frame);
-    std::vector<short> raw_input;
     std::array<std::vector<std::complex<double>>, RxSize> partitioned_data;
     std::array<std::vector<std::complex<double>>, RxSize> fft_res;
     std::vector<short> hold_consumer_internal(fifo_depth);
+    std::vector<short> raw_input(data_per_frame);
+
     std::vector<std::complex<double>> reshaped_data(data_per_frame / 2);
     std::vector<std::complex<double>> preproc_buffer(data_per_frame / 2);
 
 
-    while ((fread(read_data, sizeof(short), data_per_frame, fp)) > 0)
+    while ((fread(read_data, sizeof(short), data_per_frame, fp)) > 0 && frameCnt < 100)
     {
         frameCnt++;
         printf("Reading frame %d \n", frameCnt);
@@ -113,36 +114,40 @@ int main(int argc, char *argv[])
         /**
          * preprocessing: reshape + partition
         */
-        raw_input.insert(raw_input.begin(), read_data, read_data + data_per_frame);
+        std::vector<short>tmpRead(read_data, read_data+data_per_frame);
+        raw_input.swap(tmpRead);
+
         buffer base_frame_buffer_device(base_frame);
         buffer producer_buffer_device(raw_input);
         size_t num_elements = raw_input.size();
-        // std::cout << num_elements;
         buffer consumer_buffer_device(reshaped_data);
         buffer preproc_buffer_device(preproc_buffer);
 
-        std::vector<int> read_time(1,0), write_time(1,0);
-        buffer producer_write_time(write_time);
-        buffer consumer_read_time(read_time);
-        auto preprocProducerEvent = PreProcessingProducer(q, producer_buffer_device, preproc_buffer_device,base_frame_buffer_device, producer_write_time);
-        auto preprocConsumerEvent = PreProcessingConsumer(q, consumer_buffer_device, consumer_read_time);
-        preprocConsumerEvent.wait();
-        // preprocProducerEvent.wait();
-        printf("producer write-times: %d consumer read-times: %d\n",write_time[0], read_time[0]);
+        auto preprocProducerEvent = PreProcessingProducer(q, base_frame_buffer_device, producer_buffer_device);
+        auto preprocConsumerEvent = PreProcessingConsumer(q, consumer_buffer_device);
         q.wait();
-        auto partition_event = q.submit([&](handler &h){
-            fpga_tools::UnrolledLoop<RxSize>([&](auto i){
-                auto it = partitioned_data[i].begin();
-                int start = i * SampleSize * ChirpSize;
-                int end = (i + 1) * SampleSize * ChirpSize;
-                partitioned_data[i].insert(it, reshaped_data.begin() + start, reshaped_data.begin() + end);
-            });
-        });
+        // auto partition_event = q.submit([&](handler &h){
+        //     fpga_tools::UnrolledLoop<RxSize>([&](auto i){
+        //         auto it = partitioned_data[i].begin();
+        //         int start = i * SampleSize * ChirpSize;
+        //         int end = (i + 1) * SampleSize * ChirpSize;
+        //         partitioned_data[i].insert(it, reshaped_data.begin() + start, reshaped_data.begin() + end);
+        //     });
+        // });
         // partition_event.wait();
-        assert(partitionVerification(partitioned_data, reshaped_data));
+        // assert(partitionVerification(partitioned_data, reshaped_data));
+        // for(int i = 0; i < SampleSize * ChirpSize * RxSize; i++)
+        // {
+        //     printf("data[%d] real: %.3f  img: %.3f\n",i , real(reshaped_data[i]), imag(reshaped_data[i]));
+        // }
         // fft 
+        // q.wait();
+
+
         q.wait();
 
+
+        std::cout << frameCnt << std::endl;
     }
 
     fclose(fp);

@@ -7,61 +7,55 @@
 
 #include "kernel.hpp"
 
-event PreProcessingProducer(queue &q, buffer<short, 1>& raw_input, buffer<std::complex<double>,1>& hold, buffer<short,1> &base_frame ,buffer<int,1> &write_time)
+event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &raw_input)
 {
-    std::cout << "PreProcessing producer \n";
+    std::cout << "Enqueuing test Consumer" << std::endl;
+    size_t num_elements = raw_input.size();
     auto e = q.submit([&](handler &h){
-        accessor raw_data(raw_input, h, read_only);
-        accessor hold_buffer(hold, h, read_write);
-        accessor write_buffer(write_time, h, read_write);
-        accessor base_buffer(base_frame, h, read_only);
-        size_t num_elements = raw_input.size();
-        h.single_task<preprocessingProducerClass>([=](){
-            int ptr = 0;
-            for(int i = 0; i < num_elements; i += 4)
-            {
-                // total write times: SampleSize * ChirpleSize * Rx
-                // pack the complex numebr 
-                hold_buffer[ptr].real(raw_data[i] - base_buffer[i]);
-                hold_buffer[ptr].imag(raw_data[i+2] - base_buffer[i+2]);
-                preProcessingPipe::write(hold_buffer[ptr]);
-                write_buffer[0] ++;
-                ptr ++;
-                hold_buffer[ptr].real(raw_data[i+1] - base_buffer[i + 1]);
-                hold_buffer[ptr].imag(raw_data[i+3] - base_buffer[i + 3]);
-                preProcessingPipe::write(hold_buffer[ptr]);
-                write_buffer[0] ++;
-                ptr++;
+        accessor buf(raw_input, h, read_only);
+        accessor base(base_frame, h, read_only);
+        h.single_task([=](){
+            for(size_t i = 0; i < num_elements; i +=4)
+            {   
+                std::complex<double> tmp(buf[i] - base[i], buf[i+2] - base[i+2]);
+                // tmp.real(real(buf[i]) + real(buf[i+2]));
+                testPipe::write(tmp);
+                // tmp = buf[i + 1] + buf[i+3];
+                tmp.real(buf[i+1] - base[i+1]);
+                tmp.imag(buf[i+3] - base[i+3]);
+                // tmp.imag(imag(buf[i+1])+imag(buf[i+3]));
+                testPipe::write(tmp);
             }
         });
     });
+
     return e;
 }
 
 
-event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output, buffer<int,1> &read_time)
+event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output)
 {
-    std::cout << "preprocesing consumer\n";
+    std::cout << "Enqueuing test Consumer" << std::endl;
+    size_t num_elements = output.size();
     auto e = q.submit([&](handler &h){
-        accessor out(output, h, write_only);
-        accessor read_buffer(read_time, h, read_write);
-        size_t num_elements = output.size();
-        h.single_task<preprocessingConsumerClass>([=](){
-            for(size_t srcIdx = 0; srcIdx < num_elements; srcIdx ++){
+        accessor buf(output, h, write_only);
+        h.single_task([=](){
+            for(size_t srcIdx = 0; srcIdx < num_elements; srcIdx ++)
+            {
+                // read num_elements / 4 * 2 times
+                auto data = testPipe::read();
                 int chirpIdx = srcIdx / (RxSize * SampleSize);
                 int rxIdx = (srcIdx - chirpIdx * RxSize * SampleSize) / SampleSize;
                 int sampleIdx = srcIdx - chirpIdx * RxSize * SampleSize - rxIdx * SampleSize;
                 int destIdx = rxIdx * ChirpSize * SampleSize + chirpIdx * SampleSize + sampleIdx;
-                // total read time Sample * ChirpSize * RxSize
-                auto data = preProcessingPipe::read();
-                read_buffer[0] ++;
-                out[destIdx] = data;
+                buf[destIdx] = data;
+                // data = testPipe::read();
+                // buf[i+1] = data;
             }
         });
     });
     return e;
 }
-
 
 /**
  * fft helper function
