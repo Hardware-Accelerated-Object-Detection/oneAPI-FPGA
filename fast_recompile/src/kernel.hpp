@@ -31,26 +31,20 @@ using namespace sycl;
 #define lamda lightSpeed / f0
 #define d = 0.5 * lamda
 #define fifo_depth 4
+#define extended_length ChirpSize * ChirpSize
+
 
 using preProcessingPipe = ext::intel::pipe<class preprocessingID, std::complex<double>, fifo_depth>;
 class preprocessingProducerClass;
 class preprocessingConsumerClass;
 
 event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &output);
-
+// event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output, std::array<std::vector<std::complex<double>>, RxSize> &partitioned_data);
 event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output);
-
 
 using fftPipeArray = fpga_tools::PipeArray<
     class fftPipeID, std::complex<double>,
     fifo_depth, RxSize>;
-
-using testPipe = ext::intel::pipe<class testPipeID, std::complex<double>, fifo_depth>;
-// event testProducer(queue &q, buffer<std::complex<double>,1> &output);
-event testProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &output);
-event testConsumer(queue &q, buffer<std::complex<double>,1> &output);
-
-
 
 /**
  * fft producer & consumer.

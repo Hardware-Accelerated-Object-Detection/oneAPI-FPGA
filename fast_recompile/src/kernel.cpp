@@ -19,12 +19,12 @@ event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,
             {   
                 std::complex<double> tmp(buf[i] - base[i], buf[i+2] - base[i+2]);
                 // tmp.real(real(buf[i]) + real(buf[i+2]));
-                testPipe::write(tmp);
+                preProcessingPipe::write(tmp);
                 // tmp = buf[i + 1] + buf[i+3];
                 tmp.real(buf[i+1] - base[i+1]);
                 tmp.imag(buf[i+3] - base[i+3]);
                 // tmp.imag(imag(buf[i+1])+imag(buf[i+3]));
-                testPipe::write(tmp);
+                preProcessingPipe::write(tmp);
             }
         });
     });
@@ -37,24 +37,35 @@ event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output)
 {
     std::cout << "Enqueuing test Consumer" << std::endl;
     size_t num_elements = output.size();
-    auto e = q.submit([&](handler &h){
+    auto e1 = q.submit([&](handler &h){
         accessor buf(output, h, write_only);
         h.single_task([=](){
             for(size_t srcIdx = 0; srcIdx < num_elements; srcIdx ++)
             {
                 // read num_elements / 4 * 2 times
-                auto data = testPipe::read();
+                auto data = preProcessingPipe::read();
                 int chirpIdx = srcIdx / (RxSize * SampleSize);
                 int rxIdx = (srcIdx - chirpIdx * RxSize * SampleSize) / SampleSize;
                 int sampleIdx = srcIdx - chirpIdx * RxSize * SampleSize - rxIdx * SampleSize;
                 int destIdx = rxIdx * ChirpSize * SampleSize + chirpIdx * SampleSize + sampleIdx;
                 buf[destIdx] = data;
-                // data = testPipe::read();
-                // buf[i+1] = data;
             }
         });
     });
-    return e;
+    // e1.wait();
+    // auto e = q.submit([&](handler &h){
+    //     accessor reshaped_data(output, h, read_only);
+    //     accessor partitioned_data(partitioned_output, h, write_only);
+    //     h.parallel_for(range{RxSize,SampleSize * ChirpSize}, [=](id<2> idx){
+    //         int rxIdx = idx[0];
+    //         int dataIdx = idx[1];
+    //         int srcIdx = rxIdx * SampleSize * ChirpSize + dataIdx;
+    //         partitioned_data[0][rxIdx][dataIdx] = reshaped_data[srcIdx];
+    //     });
+    
+    // });
+
+    return e1;
 }
 
 /**

@@ -61,6 +61,15 @@ bool vectorVerification(std::vector<std::complex<double>> fftRes, std::vector<st
     return true;
 }
 
+void showVector(std::vector<std::complex<double>> vec)
+{
+    for(size_t i = 0; i < vec.size(); i ++)
+    {
+        printf("vec[%d] real: %.3f  imag: %.3f \n",i, real(vec[i]), imag(vec[i]));
+    }
+}
+
+
 int main(int argc, char *argv[])
 {
     // Select either the FPGA emulator, FPGA simulator or FPGA device
@@ -95,8 +104,14 @@ int main(int argc, char *argv[])
     /**
      * vector buffer declaration
      */
+    // size_t extended_length = nextPow2(SampleSize * ChirpSize);
     std::vector<short> base_frame(read_data, read_data + data_per_frame);
-    std::array<std::vector<std::complex<double>>, RxSize> partitioned_data;
+    std::array<std::vector<std::complex<double>>,RxSize> partitioned_data;
+    for(int i = 0; i < RxSize; i ++)
+    {
+        partitioned_data[i].resize(extended_length);
+        std::fill(partitioned_data[i].begin(),partitioned_data[i].end(),0);
+    }
     std::array<std::vector<std::complex<double>>, RxSize> fft_res;
     std::vector<short> hold_consumer_internal(fifo_depth);
     std::vector<short> raw_input(data_per_frame);
@@ -122,30 +137,28 @@ int main(int argc, char *argv[])
         size_t num_elements = raw_input.size();
         buffer consumer_buffer_device(reshaped_data);
         buffer preproc_buffer_device(preproc_buffer);
-
+        // buffer partition_buffer(partitioned_data);
         auto preprocProducerEvent = PreProcessingProducer(q, base_frame_buffer_device, producer_buffer_device);
         auto preprocConsumerEvent = PreProcessingConsumer(q, consumer_buffer_device);
         q.wait();
-        // auto partition_event = q.submit([&](handler &h){
-        //     fpga_tools::UnrolledLoop<RxSize>([&](auto i){
-        //         auto it = partitioned_data[i].begin();
-        //         int start = i * SampleSize * ChirpSize;
-        //         int end = (i + 1) * SampleSize * ChirpSize;
-        //         partitioned_data[i].insert(it, reshaped_data.begin() + start, reshaped_data.begin() + end);
-        //     });
-        // });
-        // partition_event.wait();
-        // assert(partitionVerification(partitioned_data, reshaped_data));
-        // for(int i = 0; i < SampleSize * ChirpSize * RxSize; i++)
-        // {
-        //     printf("data[%d] real: %.3f  img: %.3f\n",i , real(reshaped_data[i]), imag(reshaped_data[i]));
-        // }
-        // fft 
-        // q.wait();
+        auto partition_event = q.submit([&](handler &h){
+            fpga_tools::UnrolledLoop<RxSize>([&](auto i){
+                auto it = partitioned_data[i].begin();
+                int start = i * SampleSize * ChirpSize;
+                int end = (i + 1) * SampleSize * ChirpSize;
+                partitioned_data[i].insert(it, reshaped_data.begin() + start, reshaped_data.begin() + end);
+            });
+        });
+        partition_event.wait();
+        assert(partitionVerification(partitioned_data, reshaped_data));
+
+        /**
+         * FFT in the device
+        */
+        
 
 
         q.wait();
-
 
         std::cout << frameCnt << std::endl;
     }
