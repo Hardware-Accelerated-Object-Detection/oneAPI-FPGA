@@ -7,6 +7,7 @@
 
 #include "kernel.hpp"
 
+
 event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &raw_input)
 {
     std::cout << "Enqueuing test Consumer" << std::endl;
@@ -31,7 +32,6 @@ event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,
 
     return e;
 }
-
 
 event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output)
 {
@@ -67,6 +67,43 @@ event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output)
 
     return e1;
 }
+
+
+
+event testProducer(queue &q, buffer<std::complex<double>,1> &input)
+{
+    std::cout << "Enqueuing test FFT Producer \n";
+    auto e = q.submit([&](handler &h){
+        accessor in(input, h, read_only);
+        size_t num_elements = input.size();
+        h.single_task([=](){
+            for(size_t i = 0; i < num_elements; i ++)
+            {
+                fftPipe::write(in[i]);
+            }
+        });
+    });
+    return e;
+}
+
+
+event testConsumer(queue &q, buffer<std::complex<double>,1> &output)
+{
+    std::cout << "Enqueuing test FFT Consumer ";
+    auto e = q.submit([&](handler &h){
+        accessor out(output, h, write_only);
+        size_t num_elements = output.size();
+        h.single_task([=](){
+            for(size_t i = 0; i < num_elements; i ++)
+            {
+                out[i] = fftPipe::read();
+            }
+        });
+    });
+    return e;
+}
+
+
 
 /**
  * fft helper function

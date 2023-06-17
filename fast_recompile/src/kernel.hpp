@@ -33,48 +33,6 @@ using namespace sycl;
 #define fifo_depth 4
 #define extended_length ChirpSize * ChirpSize
 
-
-using preProcessingPipe = ext::intel::pipe<class preprocessingID, std::complex<double>, fifo_depth>;
-class preprocessingProducerClass;
-class preprocessingConsumerClass;
-
-event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &output);
-// event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output, std::array<std::vector<std::complex<double>>, RxSize> &partitioned_data);
-event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output);
-
-using fftPipeArray = fpga_tools::PipeArray<
-    class fftPipeID, std::complex<double>,
-    fifo_depth, RxSize>;
-
-/**
- * fft producer & consumer.
-*/
-
-
-
-template<size_t producer_id> class fftProducerClass;
-template <size_t consumer_id, size_t chunk_size, size_t num_elements> class fftConsumerReadClass;
-template <size_t consumer_id, size_t chunk_size, size_t num_elements> class fftConsumerButerflyClass;
-
-
-template<size_t producer_id>
-event fftProducer(queue &q, buffer<std::complex<double>,1> &input)
-{
-    std::cout << "Enqueuing FFT Producer " << producer_id << std::endl;
-    auto e = q.submit([&](handler &h){
-        accessor in(input, h, read_only);
-        auto num_elements = input.size();
-        h.single_task<fftProducerClass<producer_id>>([=](){
-            size_t i = 0;
-            for(size_t pass = 0; pass < num_elements; pass ++){
-                fftPipeArray::PipeAt<producer_id>::write(in[i++]);
-            }
-        });
-    });
-    return e;
-}
-
-
 /**
  * fft helper function
 */
@@ -84,19 +42,57 @@ namespace fft_helper{
 }
 
 
-SYCL_EXTERNAL int kernelBitsReverse(int num, int bits);
+using preProcessingPipe = ext::intel::pipe<class preprocessingID, std::complex<double>, fifo_depth>;
+event PreProcessingProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> &raw_input);
+event PreProcessingConsumer(queue &q, buffer<std::complex<double>,1> &output);
 
+using fftPipeArray = fpga_tools::PipeArray<
+    class fftPipeID, std::complex<double>,
+    fifo_depth, RxSize, 1>;
+
+
+/**
+ * fft producer & consumer.
+*/
+
+template<size_t producer_id> class fftProducerClass;
+template <size_t consumer_id, size_t chunk_size, size_t num_elements> class fftConsumerReadClass;
+template <size_t consumer_id, size_t chunk_size, size_t num_elements> class fftConsumerButerflyClass;
+
+template<size_t producer_id>
+event fftProducer(queue &q, buffer<std::complex<double>,1> &input)
+{
+    // std::cout << "Enqueuing FFT Producer " << producer_id << std::endl;
+    auto e = q.submit([&](handler &h){
+        accessor in(input, h, read_only);
+        // stream outStream(1024, 1024, h);
+        auto num_elements = input.size();
+        h.single_task<fftProducerClass<producer_id>>([=](){
+            size_t i = 0;
+            for(size_t pass = 0; pass < num_elements; pass ++){
+                fftPipeArray::PipeAt<producer_id,0>::write(in[i++]);
+            }
+            // outStream << "producer " << producer_id << " write finished\n"; 
+        });
+    });
+    return e;
+}
+
+SYCL_EXTERNAL int kernelBitsReverse(int num, int bits);
 
 template <size_t consumer_id, size_t chunk_size, size_t num_elements>
 event fftConsumer(queue &q, buffer<std::complex<double>,1> &output, int pow)
 {
-    std::cout << "Enqueuing FFT Consumer " << consumer_id << std::endl;
+    // std::cout << "Enqueuing FFT Consumer " << consumer_id << std::endl;
     auto dataReadEvent = q.submit([&](handler &h){
         accessor out(output, h, write_only);
+        // stream outStream(1024, 1024, h);
         h.single_task<fftConsumerReadClass<consumer_id, chunk_size, num_elements>>([=](){
             for(size_t i = 0; i < num_elements; i ++)
             {
-                out[i] = fftPipeArray::PipeAt<consumer_id>::read();
+                out[i] = fftPipeArray::PipeAt<consumer_id,0>::read();
+                // out[i] = fftPipe::read();
+                // outStream << "consumer " << consumer_id << "read finished\n"; 
             }
         });
     });
@@ -140,8 +136,14 @@ event fftConsumer(queue &q, buffer<std::complex<double>,1> &output, int pow)
         });
     });
     return fftEvent;
+
+
 }   
 
+
+using fftPipe = ext::intel::pipe<class fftID, std::complex<double>, fifo_depth>;
+event testProducer(queue &q, buffer<std::complex<double>,1> &input);
+event testConsumer(queue &q, buffer<std::complex<double>,1> &output);
 
 /**
  * producer & consumer for speed detection.

@@ -15,6 +15,19 @@ static inline int nextPow2(int n)
     return n;
 }
 
+int length2Pow(int len)
+{
+    int cnt = 0;
+    int tmp = 1;
+    while(tmp < len)
+    {
+        tmp <= 1;
+        cnt ++;
+    }
+    return cnt;
+}
+
+
 bool partitionVerification(std::array<std::vector<std::complex<double>>, RxSize> toComp, std::vector<std::complex<double>> ref)
 {
     for (int i = 0; i < RxSize; i++)
@@ -106,21 +119,23 @@ int main(int argc, char *argv[])
      */
     // size_t extended_length = nextPow2(SampleSize * ChirpSize);
     std::vector<short> base_frame(read_data, read_data + data_per_frame);
-    std::array<std::vector<std::complex<double>>,RxSize> partitioned_data;
+    std::array<std::vector<std::complex<double>>, RxSize> partitioned_data;
+    std::array<std::vector<std::complex<double>>, RxSize> fft_res;
     for(int i = 0; i < RxSize; i ++)
     {
-        partitioned_data[i].resize(extended_length);
+        partitioned_data[i].resize(extended_length - SampleSize * ChirpSize);
         std::fill(partitioned_data[i].begin(),partitioned_data[i].end(),0);
+        fft_res[i].resize(extended_length);
     }
-    std::array<std::vector<std::complex<double>>, RxSize> fft_res;
     std::vector<short> hold_consumer_internal(fifo_depth);
     std::vector<short> raw_input(data_per_frame);
 
     std::vector<std::complex<double>> reshaped_data(data_per_frame / 2);
     std::vector<std::complex<double>> preproc_buffer(data_per_frame / 2);
 
+    int pow = length2Pow(extended_length);
 
-    while ((fread(read_data, sizeof(short), data_per_frame, fp)) > 0 && frameCnt < 100)
+    if ((fread(read_data, sizeof(short), data_per_frame, fp)) > 0 && frameCnt < 100)
     {
         frameCnt++;
         printf("Reading frame %d \n", frameCnt);
@@ -155,12 +170,25 @@ int main(int argc, char *argv[])
         /**
          * FFT in the device
         */
-        
-
-
         q.wait();
+        fpga_tools::UnrolledLoop<RxSize>([&](auto id){
+            buffer fftInput(partitioned_data[id]);
+            buffer fftOutput(fft_res[id]);
+            // std::cout << fftInput.size() << " " << fftOutput.size() << std::endl;
+            auto fftProducerEvent = fftProducer<id>(q, fftInput);
+            auto fftConsumerEvent = fftConsumer<id,extended_length, extended_length>(q, fftOutput, pow);
+        });
+        q.wait();
+        
+        // showVector(fft_res[0]);
 
         std::cout << frameCnt << std::endl;
+        for(int i = 0; i < RxSize; i ++)
+        {
+            partitioned_data[i].resize(extended_length - SampleSize * ChirpSize);
+            std::fill(partitioned_data[i].begin(),partitioned_data[i].end(),0);
+            fft_res[i].resize(extended_length);
+        }
     }
 
     fclose(fp);
