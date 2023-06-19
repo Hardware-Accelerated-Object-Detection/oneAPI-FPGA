@@ -82,6 +82,17 @@ void showVector(std::vector<std::complex<double>> vec)
     }
 }
 
+// The following is a block diagram of this kernel this function creates:
+// in  |----| hostPipe |-------------|1d fftPipeArray(4)|---------------| 2d fftPipeArray(4)|---------------|
+// --->|Host| =======> |preProcKernel|    ======>       | 1-D FFT kernel|       ======>     | 2-D FFT kernel|
+//     |----|          |-------------|                  |---------------|                   |---------------|
+
+
+class HostProducerClass;
+class ReshapeClass;
+class PartitionClass;
+template<size_t id> class FFT1dWorker;
+template<size_t id> class PartitionWorker;
 
 int main(int argc, char *argv[])
 {
@@ -123,7 +134,7 @@ int main(int argc, char *argv[])
     std::array<std::vector<std::complex<double>>, RxSize> fft_res;
     for(int i = 0; i < RxSize; i ++)
     {
-        partitioned_data[i].resize(extended_length - SampleSize * ChirpSize);
+        partitioned_data[i].resize(extended_length);
         std::fill(partitioned_data[i].begin(),partitioned_data[i].end(),0);
         fft_res[i].resize(extended_length);
     }
@@ -131,11 +142,10 @@ int main(int argc, char *argv[])
     std::vector<short> raw_input(data_per_frame);
 
     std::vector<std::complex<double>> reshaped_data(data_per_frame / 2);
-    std::vector<std::complex<double>> preproc_buffer(data_per_frame / 2);
 
     int pow = length2Pow(extended_length);
 
-    if ((fread(read_data, sizeof(short), data_per_frame, fp)) > 0 && frameCnt < 100)
+    while ((fread(read_data, sizeof(short), data_per_frame, fp)) > 0 && frameCnt < 100)
     {
         frameCnt++;
         printf("Reading frame %d \n", frameCnt);
@@ -147,48 +157,22 @@ int main(int argc, char *argv[])
         std::vector<short>tmpRead(read_data, read_data+data_per_frame);
         raw_input.swap(tmpRead);
 
-        buffer base_frame_buffer_device(base_frame);
-        buffer producer_buffer_device(raw_input);
+        buffer base_frame_buffer(base_frame);
+        buffer raw_input_buffer(raw_input);
         size_t num_elements = raw_input.size();
-        buffer consumer_buffer_device(reshaped_data);
-        buffer preproc_buffer_device(preproc_buffer);
+        buffer reshaped_data_buffer(reshaped_data);
         // buffer partition_buffer(partitioned_data);
-        auto preprocProducerEvent = PreProcessingProducer(q, base_frame_buffer_device, producer_buffer_device);
-        auto preprocConsumerEvent = PreProcessingConsumer(q, consumer_buffer_device);
-        q.wait();
-        auto partition_event = q.submit([&](handler &h){
-            fpga_tools::UnrolledLoop<RxSize>([&](auto i){
-                auto it = partitioned_data[i].begin();
-                int start = i * SampleSize * ChirpSize;
-                int end = (i + 1) * SampleSize * ChirpSize;
-                partitioned_data[i].insert(it, reshaped_data.begin() + start, reshaped_data.begin() + end);
-            });
-        });
-        partition_event.wait();
-        assert(partitionVerification(partitioned_data, reshaped_data));
-
-        /**
-         * FFT in the device
-        */
-        q.wait();
+        auto hostProducerEvent = SubmitHostProducer<HostProducerClass, preProcessingPipe>(q, base_frame_buffer, raw_input_buffer);
+        auto preProcWorkerEvent = SubmitPreProcWorker<ReshapeClass, PartitionClass, preProcessingPipe>(q, reshaped_data_buffer);
         fpga_tools::UnrolledLoop<RxSize>([&](auto id){
-            buffer fftInput(partitioned_data[id]);
-            buffer fftOutput(fft_res[id]);
-            // std::cout << fftInput.size() << " " << fftOutput.size() << std::endl;
-            auto fftProducerEvent = fftProducer<id>(q, fftInput);
-            auto fftConsumerEvent = fftConsumer<id,extended_length, extended_length>(q, fftOutput, pow);
+            buffer fftRes(fft_res[id]);
+            buffer partitioned_buffer(partitioned_data[id]);
+            auto fftWorkerEvent = Submit1dFFTWorker<PartitionWorker<id>, FFT1dWorker<id>, id, extended_length, extended_length>(q, partitioned_buffer, fftRes, pow);
         });
         q.wait();
+        assert(partitionVerification(partitioned_data, reshaped_data));
         
-        // showVector(fft_res[0]);
-
-        std::cout << frameCnt << std::endl;
-        for(int i = 0; i < RxSize; i ++)
-        {
-            partitioned_data[i].resize(extended_length - SampleSize * ChirpSize);
-            std::fill(partitioned_data[i].begin(),partitioned_data[i].end(),0);
-            fft_res[i].resize(extended_length);
-        }
+ 
     }
 
     fclose(fp);
