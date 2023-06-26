@@ -21,12 +21,25 @@ int length2Pow(int len)
     int tmp = 1;
     while(tmp < len)
     {
-        tmp <= 1;
+        tmp <<= 1;
         cnt ++;
     }
     return cnt;
 }
 
+int findAbsMax(std::vector<std::complex<double>> &arr, int size)
+{
+    int maxIdx = 0;
+    for (int i = 0; i < size; i++)
+    {
+
+        if (std::abs(arr[i]) > std::abs(arr[maxIdx]))
+        {
+            maxIdx = i;
+        }
+    }
+    return maxIdx;
+}
 
 bool partitionVerification(std::array<std::vector<std::complex<double>>, RxSize> toComp, std::vector<std::complex<double>> ref)
 {
@@ -52,21 +65,19 @@ bool partitionVerification(std::array<std::vector<std::complex<double>>, RxSize>
     return true;
 }
 
-bool vectorVerification(std::vector<std::complex<double>> fftRes, std::vector<std::complex<double>> &ref, int idx)
+bool vectorVerification(std::vector<std::complex<double>> &fftRes, std::vector<std::complex<double>> &ref, int size)
 {
-    std::cout << "Verify vector for " << idx << std::endl;
+    // std::cout << "Vector Verification "<< std::endl;
     double tolerance = 1e-5;
     // doing fft for every ref input
-    // for (int i = 0; i < SampleSize * ChirpSize; i++)
-    for (int i = 0; i < 10; i++)
-
+    for (int i = 0; i < size; i++)
     {
-        printf("fftRes[%d] (%.3f  %.3f) ref[%d] (%.3f %.3f)\n", i, real(fftRes[i]), imag(fftRes[i]), i, real(ref[i]), imag(ref[i]));
+        // printf("fftRes[%d] (%.3f  %.3f) ref[%d] (%.3f %.3f)\n", i, real(fftRes[i]), imag(fftRes[i]), i, real(ref[i]), imag(ref[i]));
         // printf("fftRes[%d] (%.3f  %.3f)\n",i, real(fftRes[i]), imag(fftRes[i]));
         std::complex<double> diff = fftRes[i] - ref[i];
         if (abs(imag(diff)) > tolerance || abs(real(diff)) > tolerance)
         {
-            printf("Verification failed at %d input: (%.3f %.3f) expected (%.3f %.3f)\n", i, real(fftRes[i]), imag(fftRes[i]), real(ref[i]), imag(ref[i]));
+            printf("Vector Verification failed at %d input: (%.3f %.3f) expected (%.3f %.3f)\n", i, real(fftRes[i]), imag(fftRes[i]), real(ref[i]), imag(ref[i]));
             return false;
         }
     }
@@ -93,6 +104,10 @@ class ReshapeClass;
 class PartitionClass;
 template<size_t id> class FFT1dWorker;
 template<size_t id> class PartitionWorker;
+class CopyBufferWorker;
+class DistanceKernelClass;
+class AngleKernelClass;
+
 
 int main(int argc, char *argv[])
 {
@@ -111,7 +126,7 @@ int main(int argc, char *argv[])
               << device.get_info<sycl::info::device::name>().c_str()
               << std::endl;
 
-    std::cout << "Reading raw data from binary file \n";
+    // std::cout << "Reading raw data from binary file \n";
     char filepath[] = "../src/fhy_direct.bin";
     int data_per_frame = ChirpSize * SampleSize * numRx * 2;
     FILE *fp = fopen(filepath, "rb");
@@ -132,6 +147,7 @@ int main(int argc, char *argv[])
     std::vector<short> base_frame(read_data, read_data + data_per_frame);
     std::array<std::vector<std::complex<double>>, RxSize> partitioned_data;
     std::array<std::vector<std::complex<double>>, RxSize> fft_res;
+
     for(int i = 0; i < RxSize; i ++)
     {
         partitioned_data[i].resize(extended_length);
@@ -142,14 +158,30 @@ int main(int argc, char *argv[])
     std::vector<short> raw_input(data_per_frame);
 
     std::vector<std::complex<double>> reshaped_data(data_per_frame / 2);
+    std::vector<std::complex<double>> phase_matrix(angleVecLenght * RxSize);
+    std::vector<std::complex<double>> angle_weight(RxSize);
+    std::vector<std::complex<double>> angle_vector(angleVecLenght, 0);
+    /**
+     * phase_matrix initialization
+    */
+    for (int loc = 0; loc < RxSize; loc++)
+    {
+        for (int phi = -900; phi <= 900; phi++)
+        {
+            double theta = -loc * 2 * PI * d * sin((double)phi / 1800.0 * PI) / lamda;
+            phase_matrix[loc * angleVecLenght + (phi + 900)] = std::complex(cos(theta),sin(theta));
+            printf("theta %f\n",theta);
+        }
+    }
+    
 
     int pow = length2Pow(extended_length);
-
+    printf("pow %d \n",pow);
     while ((fread(read_data, sizeof(short), data_per_frame, fp)) > 0 && frameCnt < 100)
     {
         frameCnt++;
         printf("Reading frame %d \n", frameCnt);
-        printf("read %d elements\n",size);
+        // printf("read %d elements\n",size);
 
         /**
          * preprocessing: reshape + partition
@@ -164,14 +196,53 @@ int main(int argc, char *argv[])
         // buffer partition_buffer(partitioned_data);
         auto hostProducerEvent = SubmitHostProducer<HostProducerClass, preProcessingPipe>(q, base_frame_buffer, raw_input_buffer);
         auto preProcWorkerEvent = SubmitPreProcWorker<ReshapeClass, PartitionClass, preProcessingPipe>(q, reshaped_data_buffer);
+        /**
+         * 1d fft and angle detection
+        */
+        std::cout << "Enqueing FFT Worker " << std::endl;
         fpga_tools::UnrolledLoop<RxSize>([&](auto id){
             buffer fftRes(fft_res[id]);
             buffer partitioned_buffer(partitioned_data[id]);
             auto fftWorkerEvent = Submit1dFFTWorker<PartitionWorker<id>, FFT1dWorker<id>, id, extended_length, extended_length>(q, partitioned_buffer, fftRes, pow);
         });
+
         q.wait();
         assert(partitionVerification(partitioned_data, reshaped_data));
-        
+        /**
+         * Distance Detection: Result Verified
+        */
+        int maxIdx = findAbsMax(fft_res[0],floor(0.4 * extended_length));
+        float maxDisIdx = maxIdx * ChirpSize * SampleSize/(float)extended_length;
+        double Fs_extend = fs * extended_length / (ChirpSize * SampleSize);
+        double maxDis = lightSpeed * (((double)maxDisIdx / extended_length) * Fs_extend) / (2 * mu);
+        printf("maxDisIdx %.3f maxDis %.3f  \n",maxDisIdx, maxDis);
+        /**
+        * Angle detection
+        */
+        // initialize angle weights
+        for(int i = 0; i < RxSize; i ++)
+        {
+            angle_weight[i]= fft_res[i][maxIdx];
+            printf("angle_weight[%d] %.3f %.3f\n",i,real(angle_weight[i]), imag(angle_weight[i]));
+        }
+
+       buffer angle_weight_device(angle_weight);
+       buffer phase_matrix_device(phase_matrix);
+       buffer angle_vector_device(angle_vector);
+       auto angleWorkerEvent = SubmitAngleWorker<AngleKernelClass>(q, angle_weight_device, phase_matrix_device, angle_vector_device);
+       q.wait();
+
+       int maxAngleIdx = findAbsMax(angle_vector, angleVecLenght);
+    //    for(int i = 0; i < angleVecLenght; i ++)
+    //    {
+    //     printf("res[%d] %.3f %.3f \n",i ,real(angle_vector[i]), imag(angle_vector[i]));
+    //    }
+       double angle = ((double)maxAngleIdx - 900.0) / 10.0;
+       printf("maxDistIdx %d, maxAngleIdx %d, Angle %.3f degree\n", maxIdx, maxAngleIdx,angle);
+        /**
+         * Speed Detection
+        */
+
  
     }
 

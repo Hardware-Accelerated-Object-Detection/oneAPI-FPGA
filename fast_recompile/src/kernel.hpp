@@ -23,15 +23,17 @@ using namespace sycl;
 #define lightSpeed 3.0e08
 #define mu 5.987e12 // FM slope
 #define f0 77e9
-#define lamda lightSpeed / f0
-#define d = 0.5 * lamda
+// #define d  0.5 * lamda
 #define fifo_depth 4
-#define extended_length ChirpSize * ChirpSize
-
+// #define extended_length ChirpSize * ChirpSize
+#define angleVecLenght 1801
+constexpr int extended_length = ChirpSize * ChirpSize;
+constexpr double lamda = lightSpeed / f0;
+constexpr double d = 0.5 * lamda;
 
 using preProcessingPipe = ext::intel::pipe<class preprocessingID, std::complex<double>, fifo_depth>;
-
 using fft1dPipeArray = fpga_tools::PipeArray<class fft1dPipe, std::complex<double>, fifo_depth, RxSize, 1>;
+using distAnglePipeArray = fpga_tools::PipeArray<class anglePipe, std::complex<double>, fifo_depth, RxSize, 1>;
 
 /**
  * Host Function to submit the whole task producer 
@@ -49,12 +51,9 @@ event SubmitHostProducer(queue &q, buffer<short,1> &base_frame, buffer<short,1> 
             for(size_t i = 0; i < num_elements; i +=4)
             {   
                 std::complex<double> tmp(buf[i] - base[i], buf[i+2] - base[i+2]);
-                // tmp.real(real(buf[i]) + real(buf[i+2]));
                 InPipe::write(tmp);
-                // tmp = buf[i + 1] + buf[i+3];
                 tmp.real(buf[i+1] - base[i+1]);
                 tmp.imag(buf[i+3] - base[i+3]);
-                // tmp.imag(imag(buf[i+1])+imag(buf[i+3]));
                 InPipe::write(tmp);
             }
         });
@@ -114,7 +113,6 @@ SYCL_EXTERNAL int kernelBitsReverse(int num, int bits);
 template<typename PartitionKernelClass, typename FFTKernelClass,size_t id, size_t chunk_size, size_t num_elements>
 event Submit1dFFTWorker(queue &q, buffer<std::complex<double>,1> partitioned_buffer ,buffer<std::complex<double>,1> fftRes, int pow)
 {
-    std::cout << "Enqueing 1d FFT worker id = " << id << std::endl;
     auto e = q.submit([&](handler &h){
         accessor res(fftRes, h, write_only);
         accessor buf(partitioned_buffer,h,write_only);
@@ -144,6 +142,9 @@ event Submit1dFFTWorker(queue &q, buffer<std::complex<double>,1> partitioned_buf
                         chunk[i + offset] = chunk[reversedIdx + offset];
                         chunk[reversedIdx + offset] = temp;
                     }
+                    chunk[i + offset].real(real(chunk[i+offset]) / chunk_size);
+                    chunk[i + offset].imag(imag(chunk[i+offset]) / chunk_size);
+
                 }
                 // butterfly computation for each chunk 
                 for(int mid = 1; mid < chunk_size; mid <<=1)
@@ -166,8 +167,38 @@ event Submit1dFFTWorker(queue &q, buffer<std::complex<double>,1> partitioned_buf
 
         });
     });
-
     return fftEvent;
+}
+
+/**
+ * Submit distance and angle worker
+*/
+template <typename AngleWorkerKernelClass>
+event SubmitAngleWorker(queue &q, buffer<std::complex<double>,1> &angle_weight, 
+                            buffer<std::complex<double>,1> &phase_matrix,
+                            buffer<std::complex<double>,1> &angle_vector)
+{
+    std::cout << "Enqueuing angle worker\n";
+    // angle_weights (1 x 4) X phase_matrix (4 x 1801)
+    auto angleWorker = q.submit([&](handler &h){
+        accessor weight(angle_weight, h, read_only);
+        accessor matrix(phase_matrix, h, read_only);
+        accessor vector(angle_vector,h ,write_only);
+        h.single_task<AngleWorkerKernelClass>([=]{
+            for(int i = 0; i < angleVecLenght; i ++)
+            {
+                std::complex<double> res(0,0);
+                for(int j = 0; j < RxSize; j++)
+                {
+                    auto weightData = weight[j];
+                    auto matrixData = matrix[j * angleVecLenght + i];
+                    res += (weightData * matrixData) ;
+                }
+                vector[i] = res;
+            }
+        });
+    });
+    return angleWorker;
 }
 
 /**
@@ -176,4 +207,5 @@ event Submit1dFFTWorker(queue &q, buffer<std::complex<double>,1> partitioned_buf
 namespace fft_helper{
     int bitsReverse(int num, int bits);
     void hostFFT(std::vector<std::complex<double>> &input, int bits);
+    void newFFT(std::vector<std::complex<double>> &x, int len);
 }
