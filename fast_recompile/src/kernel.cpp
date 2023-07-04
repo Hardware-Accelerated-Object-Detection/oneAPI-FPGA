@@ -24,7 +24,7 @@ int fft_helper::bitsReverse(int num, int bits)
     return rev;
 }
 
-void fft_helper::hostFFT(std::vector<std::complex<double>> &input, int bits)
+void fft_helper::hostFFT(std::vector<std::complex<float>> &input, int bits)
 {
     // std::cout << "Bit Reverse\n";
     int len = input.size();
@@ -39,14 +39,14 @@ void fft_helper::hostFFT(std::vector<std::complex<double>> &input, int bits)
     // std::cout << "butterfly computaiton\n";
     for (int mid = 1; mid < len; mid <<= 1)
     {
-        std::complex<double> Wn(cos(PI / mid), -sin(PI / mid));
+        std::complex<float> Wn(cos(PI / mid), -sin(PI / mid));
         for (int r = mid << 1, j = 0; j < len; j += r)
         {
-            std::complex<double> w(1, 0);
+            std::complex<float> w(1, 0);
             for (int k = 0; k < mid; k++, w = w * Wn)
             {
-                std::complex<double> a = input[j + k];
-                std::complex<double> b = input[j + mid + k] * w;
+                std::complex<float> a = input[j + k];
+                std::complex<float> b = input[j + mid + k] * w;
                 input[j + k] = a + b;
                 input[j + mid + k] = a - b;
             }
@@ -54,7 +54,7 @@ void fft_helper::hostFFT(std::vector<std::complex<double>> &input, int bits)
     }
 }
 
-void fft_helper::newFFT(std::vector<std::complex<double>>&x, int len)
+void fft_helper::newFFT(std::vector<std::complex<float>>&x, int len)
 {
     int temp = 1, l = 0;
     int *r = (int *)malloc(sizeof(int) * len);
@@ -71,14 +71,14 @@ void fft_helper::newFFT(std::vector<std::complex<double>>&x, int len)
     }    
     for (int mid = 1; mid < len; mid <<= 1)
     {
-        std::complex<double>Wn(cos(PI / mid), -sin(PI / mid)); /*drop the "-" sin，then divided by len to get the IFFT*/
+        std::complex<float>Wn(cos(PI / mid), -sin(PI / mid)); /*drop the "-" sin，then divided by len to get the IFFT*/
         for (int R = mid << 1, j = 0; j < len; j += R)
         {
-            std::complex<double>w(1, 0);
+            std::complex<float>w(1, 0);
             for (int k = 0; k < mid; k++, w*= Wn)
             {
-                std::complex<double> a = x[j + k];
-                std::complex<double> b = w * x[j + mid + k];
+                std::complex<float> a = x[j + k];
+                std::complex<float> b = w * x[j + mid + k];
                 x[j + k] = a + b;
                 x[j + mid + k] = a - b;
             }
@@ -98,4 +98,8 @@ SYCL_EXTERNAL int kernelBitsReverse(int num, int bits)
         }
     }
     return rev;
+}
+
+SYCL_EXTERNAL float SyclSquare(float x) {
+  return x * x;
 }
