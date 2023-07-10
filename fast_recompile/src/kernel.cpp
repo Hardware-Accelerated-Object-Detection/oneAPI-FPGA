@@ -10,6 +10,21 @@
 /**
  * fft helper function
  */
+
+int length2Pow(int len) {
+  int cnt = 0;
+  int tmp = 1;
+  while (tmp < len) {
+    tmp <<= 1;
+    cnt++;
+  }
+  return cnt;
+}
+/**
+ * fft helper function to reverse index bits for later butterfly compution.
+ * @param num input index number.
+ * @param bits total number of bits of size of array = length2pow(array.size()). 
+*/
 int fft_helper::bitsReverse(int num, int bits)
 {
 
@@ -23,7 +38,9 @@ int fft_helper::bitsReverse(int num, int bits)
     }
     return rev;
 }
-
+/**
+ * host version of fft
+*/
 void fft_helper::hostFFT(std::vector<std::complex<float>> &input, int bits)
 {
     // std::cout << "Bit Reverse\n";
@@ -53,7 +70,9 @@ void fft_helper::hostFFT(std::vector<std::complex<float>> &input, int bits)
         }
     }
 }
-
+/**
+ * test version of fft in host for reference
+*/
 void fft_helper::newFFT(std::vector<std::complex<float>>&x, int len)
 {
     int temp = 1, l = 0;
@@ -87,6 +106,11 @@ void fft_helper::newFFT(std::vector<std::complex<float>>&x, int len)
     free(r);
 }
 
+/**
+ * SYCL externel function for bit reverse
+ * @param num input index number.
+ * @param bits total number of bits of size of array = length2pow(array.size()). 
+*/
 SYCL_EXTERNAL int kernelBitsReverse(int num, int bits)
 {
     int rev = 0;
@@ -100,6 +124,11 @@ SYCL_EXTERNAL int kernelBitsReverse(int num, int bits)
     return rev;
 }
 
+/**
+ * SYCL externel function for RTL porting test.
+ * 
+*/
 SYCL_EXTERNAL float SyclSquare(float x) {
   return x * x;
 }
+
