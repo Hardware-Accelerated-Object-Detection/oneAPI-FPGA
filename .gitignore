@@ -1,5 +1,5 @@
 # ignore all log and txt files
-*.txt
+# *.txt
 *.log
 # ignore all the OMP files
 OMP/*
