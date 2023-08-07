@@ -30,9 +30,9 @@ bool partitionVerification(
       float tolerance = 1e-5;
       std::complex<float> diff = toComp[i][j] - ref[globalIdx];
       if (abs(imag(diff)) > tolerance || abs(real(diff)) > tolerance) {
-        // printf("Miss match at rx[%d][%d] vs. reshaped[%d] \n", i, j, globalIdx);
-        // printf("input: %.3f %.3f expected %.3f %.3f \n", real(toComp[i][j]),
-              //  imag(toComp[i][j]), real(ref[globalIdx]), imag(ref[globalIdx]));
+        printf("Miss match at rx[%d][%d] vs. reshaped[%d] \n", i, j, globalIdx);
+        printf("input: %.3f %.3f expected %.3f %.3f \n", real(toComp[i][j]),
+               imag(toComp[i][j]), real(ref[globalIdx]), imag(ref[globalIdx]));
         return false;
       }
     }
@@ -49,9 +49,9 @@ bool vectorVerification(std::vector<std::complex<float>> &input,
   for (int i = 0; i < size; i++) {
     std::complex<float> diff = input[i] - ref[i];
     if (abs(imag(diff)) > tolerance || abs(real(diff)) > tolerance) {
-    //   printf("Vector Verification failed at %d input: (%.3f %.3f) expected "
-    //          "(%.3f %.3f)\n",
-    //          i, real(input[i]), imag(input[i]), real(ref[i]), imag(ref[i]));
+      printf("Vector Verification failed at %d input: (%.3f %.3f) expected "
+             "(%.3f %.3f)\n",
+             i, real(input[i]), imag(input[i]), real(ref[i]), imag(ref[i]));
       return false;
     }
   }
@@ -93,6 +93,7 @@ int main(int argc, char *argv[]) {
   #else // #if FPGA_EMULATOR
     auto selector = sycl::ext::intel::fpga_emulator_selector_v;
   #endif
+  
     auto props = property_list{property::queue::enable_profiling()};
     queue q(selector, fpga_tools::exception_handler, props);
   auto device = q.get_device();
@@ -167,6 +168,7 @@ int main(int argc, char *argv[]) {
             q, base_frame_buffer, raw_input_buffer);
     auto preProcWorkerEvent = SubmitPreProcWorker<ReshapeClass, PartitionClass, preProcessingPipe>(
             q, reshaped_data_buffer);
+    q.wait();
 
     /**
      * 1D fft data partition and angle detection

@@ -46,8 +46,6 @@ SYCL_EXTERNAL int kernelBitsReverse(int num, int bits);
 
 SYCL_EXTERNAL extern "C" unsigned RtlByteswap(unsigned x);
 
-SYCL_EXTERNAL float SyclSquare(float x);
-
 /**
  * Templated fft wrapper function that iteratively apply butterfly computaiton.
  * @param fftKernel class for kernel naming.
@@ -155,7 +153,7 @@ event SubmitPreProcWorker(queue &q, buffer<std::complex<float>,1> reshaped_data)
     std::cout << "Enqueuing preProc Worker" << std::endl;
     size_t num_elements = reshaped_data.size();
     auto e1 = q.submit([&](handler &h){
-        accessor buf(reshaped_data, h, write_only);
+        accessor buf(reshaped_data, h, read_write);
         h.single_task<reshapeClass>([=](){
             for(size_t srcIdx = 0; srcIdx < num_elements; srcIdx ++)
             {
